@@ -2,8 +2,11 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"time"
+
+	"encoding/json"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/examples/util"
@@ -41,9 +44,11 @@ type statsStreamFactory struct{}
 // statsStream will handle the actual decoding of stats requests.
 type statsStream struct {
 	net, transport                      gopacket.Flow
-	bytes, packets, outOfOrder, skipped int64
-	start, end                          time.Time
-	sawStart, sawEnd                    bool
+	Bytes, Packets, OutOfOrder, Skipped int64
+	Start, End                          time.Time
+	SawStart, SawEnd                    bool
+	SrcPort, DstPort                    string
+	SrcIp, DstIp                        string
 }
 
 // New creates a new stream.  It's called whenever the assembler sees a stream
@@ -53,9 +58,9 @@ func (factory *statsStreamFactory) New(net, transport gopacket.Flow) tcpassembly
 	s := &statsStream{
 		net:       net,
 		transport: transport,
-		start:     time.Now(),
+		Start:     time.Now(),
 	}
-	s.end = s.start
+	s.End = s.Start
 	// ReaderStream implements tcpassembly.Stream, so we can return a pointer to it.
 	return s
 }
@@ -64,27 +69,36 @@ func (factory *statsStreamFactory) New(net, transport gopacket.Flow) tcpassembly
 // Reassembly objects contain stream data IN ORDER.
 func (s *statsStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 	for _, reassembly := range reassemblies {
-		if reassembly.Seen.Before(s.end) {
-			s.outOfOrder++
+		if reassembly.Seen.Before(s.End) {
+			s.OutOfOrder++
 		} else {
-			s.end = reassembly.Seen
+			s.End = reassembly.Seen
 		}
-		s.bytes += int64(len(reassembly.Bytes))
-		s.packets += 1
+		s.Bytes += int64(len(reassembly.Bytes))
+		s.Packets += 1
 		if reassembly.Skip > 0 {
-			s.skipped += int64(reassembly.Skip)
+			s.Skipped += int64(reassembly.Skip)
 		}
-		s.sawStart = s.sawStart || reassembly.Start
-		s.sawEnd = s.sawEnd || reassembly.End
+		s.SawStart = s.SawStart || reassembly.Start
+		s.SawEnd = s.SawEnd || reassembly.End
 	}
 }
 
-var sessions []*statsStream
+type Stats struct {
+	Sessions           []*statsStream
+	StartTime, EndTime time.Time
+}
+
+var stats Stats
 
 // ReassemblyComplete is called when the TCP assembler believes a stream has
 // finished.
 func (s *statsStream) ReassemblyComplete() {
-	sessions = append(sessions, s)
+	s.SrcPort = s.transport.Src().String()
+	s.DstPort = s.transport.Dst().String()
+	s.SrcIp = s.net.Src().String()
+	s.DstIp = s.net.Dst().String()
+	stats.Sessions = append(stats.Sessions, s)
 }
 
 func main() {
@@ -142,6 +156,8 @@ func main() {
 	ticker := time.Tick(flushDuration)
 	packets := packetSource.Packets()
 
+	stats.StartTime = time.Now()
+
 	for {
 		select {
 		case packet := <-packets:
@@ -166,8 +182,15 @@ func main() {
 			}
 		case <-ticker:
 			assembler.FlushAll()
-			log.Printf("processed %d sessions", len(sessions))
-			sessions = nil
+			log.Printf("processed %d sessions", len(stats.Sessions))
+			stats.EndTime = time.Now()
+			b, err := json.Marshal(stats)
+			if err != nil {
+				println(err)
+			}
+			fmt.Println(string(b))
+			stats.StartTime = time.Now()
+			stats.Sessions = nil
 		}
 
 	}
