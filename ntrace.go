@@ -25,7 +25,7 @@ var bufferedTotal = flag.Int("total_max_buffer", 0, `
 Max packets to buffer total before skipping over gaps in connections and
 continuing to stream connection data.  If zero or less, this is infinite`)
 
-var flushAfter = flag.String("flush_after", "10s", `
+var flushAfter = flag.String("flush_after", "2s", `
 Connections which have buffered packets (they've gotten packets out of order and
 are waiting for old packets to fill the gaps) are flushed after they're this old
 (their oldest gap is skipped).  Any string parsed by time.ParseDuration is
@@ -49,7 +49,7 @@ type statsStream struct {
 // New creates a new stream.  It's called whenever the assembler sees a stream
 // it isn't currently following.
 func (factory *statsStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
-	log.Printf("new stream %v:%v started", net, transport)
+	// log.Printf("new stream %v:%v started", net, transport)
 	s := &statsStream{
 		net:       net,
 		transport: transport,
@@ -79,13 +79,12 @@ func (s *statsStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 	}
 }
 
+var sessions []*statsStream
+
 // ReassemblyComplete is called when the TCP assembler believes a stream has
 // finished.
 func (s *statsStream) ReassemblyComplete() {
-	diffSecs := float64(s.end.Sub(s.start)) / float64(time.Second)
-	log.Printf("Reassembly of stream %v:%v complete - start:%v end:%v bytes:%v packets:%v ooo:%v bps:%v pps:%v skipped:%v",
-		s.net, s.transport, s.start, s.end, s.bytes, s.packets, s.outOfOrder,
-		float64(s.bytes)/diffSecs, float64(s.packets)/diffSecs, s.skipped)
+	sessions = append(sessions, s)
 }
 
 func main() {
@@ -161,14 +160,14 @@ func main() {
 						tcp := packet.TransportLayer().(*layers.TCP)
 						assembler.AssembleWithTimestamp(netFlow, tcp, packet.Metadata().CaptureInfo.Timestamp)
 					} else {
-						log.Println("could not find IPv4 or IPv6 layer, inoring")
+						// log.Println("could not find IPv4 or IPv6 layer, inoring")
 					}
 				}
 			}
 		case <-ticker:
-			stats, _ := handle.Stats()
-			log.Printf("flushing all streams that haven't seen packets in the last 2 minutes, pcap stats: %+v", stats)
-			assembler.FlushOlderThan(time.Now().Add(flushDuration))
+			assembler.FlushAll()
+			log.Printf("processed %d sessions", len(sessions))
+			sessions = nil
 		}
 
 	}
