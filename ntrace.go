@@ -8,7 +8,9 @@ import (
 )
 
 func handlePacket(packet gopacket.Packet) {
-	fmt.Println("I got a packet!")
+	if transport := packet.TransportLayer(); transport != nil {
+		fmt.Println(transport.LayerType())
+	}
 }
 
 func main() {
